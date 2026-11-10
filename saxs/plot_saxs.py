@@ -225,6 +225,35 @@ def cluster_qranges(samples: list) -> dict[str, list]:
 
 # ── Blank subtraction ─────────────────────────────────────────────────────────
 
+def _parse_blank_type(s: str) -> tuple[str, str]:
+    """
+    Parse a blank type string like 'perm3', 'per3', 'ret2', 'mq' into
+    (type, number).  Returns ('', '') if unrecognised.
+    """
+    lo = s.lower().strip()
+    m = re.match(r'(?:permeate|perm|per)(\d*)', lo)
+    if m:
+        return 'per', m.group(1)
+    m = re.match(r'ret(?:entate)?(\d*)', lo)
+    if m:
+        return 'ret', m.group(1)
+    if re.search(r'\bmq\b|mqw|\bmilli.?q\b', lo):
+        return 'mq', ''
+    if 'buffer' in lo:
+        return 'buffer', ''
+    return lo, ''
+
+
+def _filter_by_blank_type(samples: list, blank_type: str) -> list:
+    """Select blank samples from *samples* using a type string (e.g. 'perm3')."""
+    typ, num = _parse_blank_type(blank_type)
+    if not typ:
+        return []
+    return [s for s in samples
+            if s['sample']['type'] == typ
+            and (not num or num in s['sample']['label'])]
+
+
 def assign_qranges_from_ref(samples: list, ref_range_groups: dict) -> None:
     """Assign qrange labels to samples by nearest mean distance in ref_range_groups."""
     cluster_means = {
@@ -236,15 +265,29 @@ def assign_qranges_from_ref(samples: list, ref_range_groups: dict) -> None:
         s['qrange'] = closest
 
 
+def _sample_temp(s: dict) -> str:
+    """Temperature string extracted from sample metadata."""
+    try:
+        temp = float(s['meta'].get('Temperature-TC', s['meta'].get('Temperature', '')))
+        return f'{temp:.0f}°C'
+    except (ValueError, TypeError):
+        return '20°C'
+
+
 def subtract_blank(samples: list, blank_samples: list) -> list:
     """
     Subtract blank from each sample; propagate uncertainties in quadrature.
 
+    Blanks are matched by (qrange, temperature); falls back to qrange-only if
+    no temperature-matched blank exists.
     blank_samples must already have 'qrange' assigned matching the main data.
     Returns a new list (blank samples are excluded).
     """
+    blank_by_range_temp: dict[tuple, list] = {}
     blank_by_range: dict[str, list] = {}
     for b in blank_samples:
+        t = _sample_temp(b)
+        blank_by_range_temp.setdefault((b['qrange'], t), []).append(b)
         blank_by_range.setdefault(b['qrange'], []).append(b)
 
     blank_ids = {id(b) for b in blank_samples}
@@ -252,7 +295,9 @@ def subtract_blank(samples: list, blank_samples: list) -> list:
     for s in samples:
         if id(s) in blank_ids:
             continue
-        blanks = blank_by_range.get(s['qrange'], [])
+        t      = _sample_temp(s)
+        blanks = blank_by_range_temp.get((s['qrange'], t)) \
+                 or blank_by_range.get(s['qrange'], [])
         if not blanks:
             result.append(s)
             continue
@@ -278,11 +323,16 @@ def subtract_blank(samples: list, blank_samples: list) -> list:
 
 # ── Output directory helpers ───────────────────────────────────────────────────
 
-def make_plots_dir(folder: Path, suffix: str = '') -> Path:
-    base = folder / f'plots{suffix}'
+def _versioned_suffix(folder: Path, stem: str, suffix: str) -> str:
+    """Return an empty string or '_YYYYMMDD' so that stem+suffix doesn't collide."""
+    base = folder / f'{stem}{suffix}'
     if base.exists():
-        ts   = datetime.now().strftime('%Y%m%d')
-        base = folder / f'plots{suffix}_{ts}'
+        return f'_{datetime.now().strftime("%Y%m%d")}'
+    return ''
+
+
+def make_plots_dir(folder: Path, suffix: str = '', ts: str = '') -> Path:
+    base = folder / f'plots{suffix}{ts}'
     base.mkdir(parents=True, exist_ok=True)
     return base
 
@@ -336,9 +386,45 @@ def _safe(label: str) -> str:
     return re.sub(r'[^\w\-.]', '_', label)
 
 
+# ── Data export helpers ────────────────────────────────────────────────────────
+
+def save_dat(path: Path, q: np.ndarray, I: np.ndarray, sig: np.ndarray,
+             label: str = '') -> None:
+    """Write (q, I, σ) as whitespace-separated .dat, compatible with pripps --fit."""
+    mask = np.isfinite(q) & np.isfinite(I) & np.isfinite(sig)
+    q, I, sig = q[mask], I[mask], sig[mask]
+    with open(path, 'w') as fh:
+        if label:
+            fh.write(f'# {label}\n')
+        fh.write(f'{"q(A-1)":<24}{"I(q)":<24}{"Sigma_I":<24}\n')
+        for qi, Ii, si in zip(q, I, sig):
+            fh.write(f'{qi:24.10e}{Ii:24.10e}{si:24.10e}\n')
+
+
+def make_data_dir(folder: Path, suffix: str = '', ts: str = '') -> Path:
+    base = folder / f'processed_saxs{suffix}{ts}'
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def _zoom_mask(q: np.ndarray, I: np.ndarray,
+               xlim: tuple | None, ylim: tuple | None) -> np.ndarray:
+    """Boolean mask selecting points within the zoom axis limits."""
+    mask = np.ones(len(q), dtype=bool)
+    if xlim is not None:
+        mask &= q >= xlim[0]
+        if len(xlim) > 1 and xlim[1] is not None:
+            mask &= q <= xlim[1]
+    if ylim is not None:
+        mask &= I >= ylim[0]
+        if len(ylim) > 1 and ylim[1] is not None:
+            mask &= I <= ylim[1]
+    return mask
+
+
 # ── Individual and overlay plots ───────────────────────────────────────────────
 
-def plot_individual(s: dict, outdir: Path):
+def plot_individual(s: dict, outdir: Path, datdir: Path | None = None):
     fig, ax_I, ax_snr = _make_Isnr_fig(6, 7)
     v = _valid(s)
     ax_I.plot(s['q'][v], s['I'][v], color='#1f77b4', lw=LW, label=s['label'])
@@ -349,9 +435,12 @@ def plot_individual(s: dict, outdir: Path):
     fig.tight_layout(pad=0.2)
     fig.savefig(outdir / f'{_safe(s["name"])}.png', dpi=DPI, bbox_inches='tight')
     plt.close(fig)
+    if datdir is not None:
+        save_dat(datdir / f'{_safe(s["name"])}.dat', s['q'], s['I'], s['sig'], s['label'])
 
 
-def plot_overlay(samples: list, range_tag: str, outdir: Path):
+def plot_overlay(samples: list, range_tag: str, outdir: Path,
+                 datdir: Path | None = None):
     if not samples:
         return
     colors = _colors(len(samples))
@@ -368,6 +457,9 @@ def plot_overlay(samples: list, range_tag: str, outdir: Path):
     fig.savefig(out, dpi=DPI, bbox_inches='tight')
     plt.close(fig)
     print(f'    {out.relative_to(out.parents[3])}')
+    if datdir is not None:
+        for s in samples:
+            save_dat(datdir / f'{_safe(s["name"])}.dat', s['q'], s['I'], s['sig'], s['label'])
 
 
 # ── Sample grouping by identity across ranges ──────────────────────────────────
@@ -414,7 +506,8 @@ def group_by_identity(range_groups: dict[str, list]) -> list[dict]:
 
 _LS_CYCLE = ['-', '--', ':', '-.']
 
-def plot_overlap_overlay(series_list: list, range_order: list, outdir: Path):
+def plot_overlap_overlay(series_list: list, range_order: list, outdir: Path,
+                         datdir: Path | None = None):
     if not series_list:
         return
 
@@ -437,6 +530,9 @@ def plot_overlap_overlay(series_list: list, range_order: list, outdir: Path):
                       label=s['label'] if i == 0 else '')
             if ax_snr is not None:
                 ax_snr.plot(s['q'][v], s['I'][v] / s['sig'][v], color=c, lw=LW, ls=ls)
+            if datdir is not None:
+                save_dat(datdir / f'{_safe(s["name"])}.dat',
+                         s['q'], s['I'], s['sig'], s['label'])
 
     # Line-style legend for ranges
     style_handles = [
@@ -456,7 +552,8 @@ def plot_overlap_overlay(series_list: list, range_order: list, outdir: Path):
     print(f'    {out.relative_to(out.parents[4])}')
 
 
-def plot_overlap_individual(ser: dict, range_order: list, outdir: Path):
+def plot_overlap_individual(ser: dict, range_order: list, outdir: Path,
+                            datdir: Path | None = None):
     fig, ax_I, ax_snr = _make_Isnr_fig(7, 8)
     for i, rlabel in enumerate(range_order):
         slist = ser['ranges'].get(rlabel, [])
@@ -467,6 +564,9 @@ def plot_overlap_individual(ser: dict, range_order: list, outdir: Path):
                       label=f'{s["label"]} ({rlabel.replace("_","-")})')
             if ax_snr is not None:
                 ax_snr.plot(s['q'][v], s['I'][v] / s['sig'][v], lw=LW, ls=ls)
+            if datdir is not None:
+                save_dat(datdir / f'{_safe(s["name"])}.dat',
+                         s['q'], s['I'], s['sig'], s['label'])
     disp = _display_identity(ser)
     _style_pair(ax_I, ax_snr, title=f'Overlap — {disp}')
     ax_I.legend(fontsize=FS_LEG, frameon=True)
@@ -678,7 +778,8 @@ def _plot_stitched_overlay_core(results: list, ax_I, ax_snr):
             ax_I.axvline(qc, color=c, lw=0.6, ls=':', alpha=0.5)
 
 
-def plot_stitched_overlay(results: list, outdir: Path):
+def plot_stitched_overlay(results: list, outdir: Path,
+                          datdir: Path | None = None):
     """results: list of (q, I, sig, joins, label, identity, temperature)."""
     if not results:
         return
@@ -691,27 +792,39 @@ def plot_stitched_overlay(results: list, outdir: Path):
     fig.savefig(out, dpi=DPI, bbox_inches='tight')
     plt.close(fig)
     print(f'    {out.relative_to(out.parents[4])}')
+    if datdir is not None:
+        for q, I, sig, _joins, lbl, *_ in results:
+            save_dat(datdir / f'{_safe(lbl)}.dat', q, I, sig, lbl)
 
 
-def plot_stitched_overlay_zoom(results: list, outdir: Path):
+_ZOOM_XLIM = (1e-2, None)
+_ZOOM_YLIM = (1e-5, 1e-2)
+
+
+def plot_stitched_overlay_zoom(results: list, outdir: Path,
+                                datdir: Path | None = None):
     """Like plot_stitched_overlay but zoomed to q > 1e-2 and I(q) < 1e-2, bottom 1e-5."""
     if not results:
         return
     fig, ax_I, ax_snr = _make_Isnr_fig(8, 9)
     _plot_stitched_overlay_core(results, ax_I, ax_snr)
     _style_pair(ax_I, ax_snr, title='Stitched — high-q zoom')
-    ax_I.set_xlim(left=1e-2)
-    ax_I.set_ylim(bottom=1e-5, top=1e-2)
+    ax_I.set_xlim(left=_ZOOM_XLIM[0])
+    ax_I.set_ylim(bottom=_ZOOM_YLIM[0], top=_ZOOM_YLIM[1])
     ax_I.legend(fontsize=FS_LEG, frameon=True)
     fig.tight_layout(pad=0.2)
     out = outdir / 'stitched_overlay_zoom.png'
     fig.savefig(out, dpi=DPI, bbox_inches='tight')
     plt.close(fig)
     print(f'    {out.relative_to(out.parents[4])}')
+    if datdir is not None:
+        for q, I, sig, _joins, lbl, *_ in results:
+            m = _zoom_mask(q, I, _GRP_XLIM, _GRP_YLIM)
+            save_dat(datdir / f'{_safe(lbl)}.dat', q[m], I[m], sig[m], lbl)
 
 
 def _save_grouped_overlay(relabelled: list, title: str, stem: str, outdir: Path,
-                           xlim=None, ylim=None):
+                           xlim=None, ylim=None, datdir: Path | None = None):
     """Draw one grouped overlay and save; optionally zoom with fixed axis limits."""
     fig, ax_I, ax_snr = _make_Isnr_fig(8, 9)
     _plot_stitched_overlay_core(relabelled, ax_I, ax_snr)
@@ -728,9 +841,18 @@ def _save_grouped_overlay(relabelled: list, title: str, stem: str, outdir: Path,
     fig.savefig(out, dpi=DPI, bbox_inches='tight')
     plt.close(fig)
     print(f'    {out.name}')
+    if datdir is not None:
+        for q, I, sig, _joins, lbl, *_ in relabelled:
+            m = _zoom_mask(q, I, xlim, ylim) if (xlim or ylim) else slice(None)
+            save_dat(datdir / f'{_safe(lbl)}.dat', q[m], I[m], sig[m], lbl)
 
 
-def plot_stitched_by_temperature(results: list, outdir: Path):
+_GRP_XLIM = (6e-2, 7e-1)
+_GRP_YLIM = (1e-5, 1e-2)
+
+
+def plot_stitched_by_temperature(results: list, outdir: Path,
+                                  datdir: Path | None = None):
     """One overlay per temperature (full range + zoom) — curves labelled by sample identity."""
     by_temp: dict[str, list] = {}
     for item in results:
@@ -741,13 +863,17 @@ def plot_stitched_by_temperature(results: list, outdir: Path):
     bt_zoom_dir = ensure(outdir / 'by_temperature_zoom')
     for t, items in sorted(by_temp.items()):
         relabelled = [(q, I, s, j, ident, ident, tt)
-                      for (q, I, s, j, _lbl, ident, tt) in items]
-        _save_grouped_overlay(relabelled, f'Stitched — {t}', _safe(t), bt_dir)
+                      for (q, I, s, j, _lbl, ident, tt, *_) in items]
+        d      = ensure(datdir / 'by_temperature')      if datdir is not None else None
+        d_zoom = ensure(datdir / 'by_temperature_zoom') if datdir is not None else None
+        _save_grouped_overlay(relabelled, f'Stitched — {t}', _safe(t), bt_dir, datdir=d)
         _save_grouped_overlay(relabelled, f'Stitched — {t} (zoom)',
-                              _safe(t), bt_zoom_dir, xlim=(6e-2, 7e-1), ylim=(1e-5, 1e-2))
+                              _safe(t), bt_zoom_dir,
+                              xlim=_GRP_XLIM, ylim=_GRP_YLIM, datdir=d_zoom)
 
 
-def plot_stitched_by_sample(results: list, outdir: Path):
+def plot_stitched_by_sample(results: list, outdir: Path,
+                             datdir: Path | None = None):
     """One overlay per sample identity (full range + zoom) — curves labelled by temperature."""
     by_ident: dict[str, list] = {}
     for item in results:
@@ -758,15 +884,19 @@ def plot_stitched_by_sample(results: list, outdir: Path):
     bs_zoom_dir = ensure(outdir / 'by_sample_zoom')
     for ident, items in sorted(by_ident.items()):
         relabelled = [(q, I, s, j, tt, ident, tt)
-                      for (q, I, s, j, _lbl, ident, tt) in items]
-        _save_grouped_overlay(relabelled, f'Stitched — {ident}', _safe(ident), bs_dir)
+                      for (q, I, s, j, _lbl, ident, tt, *_) in items]
+        d      = ensure(datdir / 'by_sample')      if datdir is not None else None
+        d_zoom = ensure(datdir / 'by_sample_zoom') if datdir is not None else None
+        _save_grouped_overlay(relabelled, f'Stitched — {ident}', _safe(ident), bs_dir, datdir=d)
         _save_grouped_overlay(relabelled, f'Stitched — {ident} (zoom)',
-                              _safe(ident), bs_zoom_dir, xlim=(6e-2, 7e-1), ylim=(1e-5, 1e-2))
+                              _safe(ident), bs_zoom_dir,
+                              xlim=_GRP_XLIM, ylim=_GRP_YLIM, datdir=d_zoom)
 
 
 def plot_stitched_individual(q_m, I_m, sig_m, joins,
                               ordered_samples: list, range_order: list,
-                              outdir: Path, title: str):
+                              outdir: Path, title: str,
+                              datdir: Path | None = None):
     fig, ax_I, ax_snr = _make_Isnr_fig(7, 8)
 
     # Original branches (faded) — one curve per range in this temperature group
@@ -798,21 +928,95 @@ def plot_stitched_individual(q_m, I_m, sig_m, joins,
     fig.tight_layout(pad=0.2)
     fig.savefig(outdir / f'{_safe(title)}.png', dpi=DPI, bbox_inches='tight')
     plt.close(fig)
+    if datdir is not None:
+        save_dat(datdir / f'{_safe(title)}.dat', q_m, I_m, sig_m, title)
+
+
+# ── S(q) calculation ──────────────────────────────────────────────────────────
+
+def compute_sq(q_t, I_t, sig_t, q_r, I_r, sig_r, c_t, c_r):
+    """S(q) = I(q,c) / [(c/c0)*I(q,c0)] with propagated uncertainty."""
+    fi  = interp1d(q_r, I_r,   kind='linear', bounds_error=False, fill_value=np.nan)
+    fs  = interp1d(q_r, sig_r, kind='linear', bounds_error=False, fill_value=np.nan)
+    Ir  = fi(q_t)
+    sr  = fs(q_t)
+    P   = (c_t / c_r) * Ir
+    ok  = (I_t > 0) & (Ir > 0) & np.isfinite(I_t) & np.isfinite(Ir)
+    S   = I_t[ok] / P[ok]
+    sigS = S * np.sqrt((sig_t[ok] / I_t[ok])**2 + (sr[ok] / Ir[ok])**2)
+    return q_t[ok], S, sigS
+
+
+def plot_sq_by_temperature(sq_results: list, outdir: Path,
+                            datdir: Path | None = None):
+    """One S(q) overlay per temperature. sq_results: list of (q,S,sig,conc_mg,temp)."""
+    by_temp: dict[str, list] = {}
+    for item in sq_results:
+        by_temp.setdefault(item[4], []).append(item)
+    for t, items in sorted(by_temp.items()):
+        colors = _colors(len(items))
+        fig, ax = plt.subplots(figsize=(7, 5), dpi=DPI)
+        for (q, S, sig, c, _t), col in zip(items, colors):
+            v = (S > 0) & np.isfinite(S)
+            ax.plot(q[v], S[v], color=col, lw=LW, label=f'TC {c:g} mg/mL')
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        ax.set_xlabel(r'$q$ [$\mathrm{\AA}^{-1}$]', fontsize=FS_LBL)
+        ax.set_ylabel(r'$S(q)$', fontsize=FS_LBL)
+        ax.set_title(f'S(q) — {t}', fontsize=FS_TTL)
+        ax.grid(True, alpha=A_GRID)
+        ax.tick_params(labelsize=FS_TK)
+        ax.legend(fontsize=FS_LEG, frameon=True)
+        fig.tight_layout(pad=0.2)
+        out = outdir / f'Sq_{_safe(t)}.png'
+        fig.savefig(out, dpi=DPI, bbox_inches='tight')
+        plt.close(fig)
+        print(f'    {out.name}')
+        if datdir is not None:
+            for q, S, sig, c, temp in items:
+                lbl = f'TC {c:g} mg_mL, {temp}'
+                save_dat(datdir / f'{_safe(lbl)}.dat', q, S, sig, lbl)
+
+
+def plot_sq_by_concentration(sq_results: list, outdir: Path):
+    """One S(q) overlay per concentration. sq_results: list of (q,S,sig,conc_mg,temp)."""
+    by_conc: dict[float, list] = {}
+    for item in sq_results:
+        by_conc.setdefault(item[3], []).append(item)
+    for c, items in sorted(by_conc.items()):
+        colors = _colors(len(items))
+        fig, ax = plt.subplots(figsize=(7, 5), dpi=DPI)
+        for (q, S, sig, _c, t), col in zip(items, colors):
+            v = (S > 0) & np.isfinite(S)
+            ax.plot(q[v], S[v], color=col, lw=LW, label=t)
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        ax.set_xlabel(r'$q$ [$\mathrm{\AA}^{-1}$]', fontsize=FS_LBL)
+        ax.set_ylabel(r'$S(q)$', fontsize=FS_LBL)
+        ax.set_title(f'S(q) — TC {c:g} mg/mL', fontsize=FS_TTL)
+        ax.grid(True, alpha=A_GRID)
+        ax.tick_params(labelsize=FS_TK)
+        ax.legend(fontsize=FS_LEG, frameon=True)
+        fig.tight_layout(pad=0.2)
+        out = outdir / f'Sq_TC_{_safe(f"{c:g}_mg_mL")}.png'
+        fig.savefig(out, dpi=DPI, bbox_inches='tight')
+        plt.close(fig)
+        print(f'    {out.name}')
 
 
 # ── Main per-folder pipeline ───────────────────────────────────────────────────
 
 def _temp_key(s: dict) -> str:
-    """Temperature label from a sample; strips any replicate suffix."""
-    t = s['label'].rsplit(', ', 1)[-1]
-    return re.sub(r'\s*\[rep \d+\]$', '', t).strip()
+    return _sample_temp(s)
 
 
 def process_folder(folder: Path,
                    qcut_manual: float | None = None,
                    normalize_exposure: bool = False,
                    blank_sub: bool = False,
-                   blank_dir: Path | None = None):
+                   blank_dir: Path | None = None,
+                   blank_type: str | None = None,
+                   ff_conc: float | None = None):
     if not folder.exists():
         print(f'[WARN] Folder not found: {folder}', file=sys.stderr)
         return
@@ -854,10 +1058,18 @@ def process_folder(folder: Path,
                     except Exception as exc:
                         print(f'  [WARN] blank {f.name}: {exc}')
                 # Prefer MQ water entries; fall back to all files
-                blank_samples = [s for s in bl_all if s['sample']['type'] == 'mq'] or bl_all
+                blank_samples = (
+                    [s for s in bl_all if s['sample']['type'] == 'mq']
+                    or [s for s in bl_all if s['sample']['type'] == 'per']
+                    or bl_all
+                )
                 assign_qranges_from_ref(blank_samples, range_groups)
                 print(f'  Blank folder: {blank_dir} '
                       f'({len(blank_samples)} blank sample(s))')
+        elif blank_type is not None:
+            blank_samples = _filter_by_blank_type(samples, blank_type)
+            print(f'  Blank subtraction (type "{blank_type}"): '
+                  f'{len(blank_samples)} sample(s) found in folder')
         else:
             blank_samples = [s for s in samples if s['sample']['type'] == 'mq']
             print(f'  Blank subtraction: {len(blank_samples)} MQ water sample(s) '
@@ -888,8 +1100,10 @@ def process_folder(folder: Path,
     if n_rep_groups:
         print(f'  Replicate groups: {n_rep_groups}')
 
-    # Output directories
-    plots   = make_plots_dir(folder, plots_suffix)
+    # Output directories — compute a shared timestamp so plots/ and processed_saxs/
+    # are always created together and never silently overwrite prior runs.
+    ts_ver  = _versioned_suffix(folder, 'plots', plots_suffix)
+    plots   = make_plots_dir(folder, plots_suffix, ts_ver)
     ov_dir  = ensure(plots / 'overlay')
     ind_dir = plots / 'individuals'
     ool_dir = ensure(plots / 'overlap' / 'overlay')
@@ -898,14 +1112,26 @@ def process_folder(folder: Path,
     sti_dir = ensure(plots / 'stitched' / 'individuals')
     print(f'  Output: {plots}')
 
+    data      = make_data_dir(folder, plots_suffix, ts_ver)
+    d_ov      = ensure(data / 'overlay')
+    d_ind     = data / 'individuals'
+    d_ool     = ensure(data / 'overlap' / 'overlay')
+    d_ooi     = ensure(data / 'overlap' / 'individuals')
+    d_stl     = ensure(data / 'stitched' / 'overlay')
+    d_stl_zoo = ensure(data / 'stitched' / 'overlay_zoom')
+    d_sti     = ensure(data / 'stitched' / 'individuals')
+    print(f'  Data:   {data}')
+
     # 1. Overlay per q-range
     for rlabel, rsamples in range_groups.items():
-        plot_overlay(rsamples, rlabel, ov_dir)
+        plot_overlay(rsamples, rlabel, ov_dir,
+                     datdir=ensure(d_ov / rlabel))
 
     # 2. Individual plots
     for s in samples:
         qr_dir = ensure(ind_dir / s['qrange'])
-        plot_individual(s, qr_dir)
+        plot_individual(s, qr_dir,
+                        datdir=ensure(d_ind / s['qrange']))
 
     # 3 & 4. Overlap + stitching (group by physical sample identity)
     series_list = group_by_identity(range_groups)
@@ -920,9 +1146,9 @@ def process_folder(folder: Path,
         print(f'  Single-range samples (no overlap): '
               f'{[s["identity"] for s in single_range]}')
 
-    plot_overlap_overlay(multi_range, range_order, ool_dir)
+    plot_overlap_overlay(multi_range, range_order, ool_dir, datdir=d_ool)
     for ser in series_list:
-        plot_overlap_individual(ser, range_order, ooi_dir)
+        plot_overlap_individual(ser, range_order, ooi_dir, datdir=d_ooi)
 
     stitch_results = []
     for ser in multi_range:
@@ -949,11 +1175,12 @@ def process_folder(folder: Path,
                 q_m, I_m, sig_m, joins = stitch_chain(
                     ordered, qcut=qcut_manual,
                     normalize_exposure=normalize_exposure)
+                conc_mg = ordered[0]['sample'].get('conc_mg')
                 stitch_results.append(
-                    (q_m, I_m, sig_m, joins, full_lbl, ident_lbl, t))
+                    (q_m, I_m, sig_m, joins, full_lbl, ident_lbl, t, conc_mg))
                 plot_stitched_individual(q_m, I_m, sig_m, joins,
                                           ordered, range_order, sti_dir,
-                                          title=full_lbl)
+                                          title=full_lbl, datdir=d_sti)
                 join_str = '  '.join(
                     f'q_cut={qc:.4f} Å⁻¹ scale='
                     + (f'{sc:.3f}' if 0.01 <= sc <= 100 else f'{sc:.2e}')
@@ -965,10 +1192,54 @@ def process_folder(folder: Path,
             except Exception as exc:
                 print(f'  [WARN] stitch failed for {full_lbl}: {exc}')
 
-    plot_stitched_overlay(stitch_results, stl_dir)
-    plot_stitched_overlay_zoom(stitch_results, stl_dir)
-    plot_stitched_by_temperature(stitch_results, stl_dir)
-    plot_stitched_by_sample(stitch_results, stl_dir)
+    plot_stitched_overlay(stitch_results, stl_dir, datdir=d_stl)
+    plot_stitched_overlay_zoom(stitch_results, stl_dir, datdir=d_stl_zoo)
+    plot_stitched_by_temperature(stitch_results, stl_dir, datdir=d_stl)
+    plot_stitched_by_sample(stitch_results, stl_dir, datdir=d_stl)
+
+    # ── S(q) from zoom-masked stitched data ────────────────────────────────────
+    tc_zoom = []
+    for q, I, sig, _joins, _lbl, _ident, t, conc_mg in stitch_results:
+        if conc_mg is None:
+            continue
+        m = _zoom_mask(q, I, _GRP_XLIM, _GRP_YLIM)
+        if m.sum() > 0:
+            tc_zoom.append((q[m], I[m], sig[m], conc_mg, t))
+
+    if tc_zoom:
+        avail_concs = sorted({item[3] for item in tc_zoom})
+        ref_c = ff_conc if ff_conc is not None else avail_concs[0]
+        if ref_c not in avail_concs:
+            print(f'  [WARN] --ff-conc {ref_c} mg/mL not found '
+                  f'(available: {avail_concs}); skipping S(q).')
+        else:
+            ref_by_temp = {t: (q, I, sig)
+                           for q, I, sig, c, t in tc_zoom if c == ref_c}
+            sq_results_list: list = []
+            for q, I, sig, c, t in tc_zoom:
+                if c == ref_c:
+                    continue
+                if t not in ref_by_temp:
+                    print(f'  [WARN] No reference (TC {ref_c:g} mg/mL) at {t}; '
+                          f'skipping S(q).')
+                    continue
+                q_r, I_r, sig_r = ref_by_temp[t]
+                try:
+                    q_s, S, sigS = compute_sq(q, I, sig, q_r, I_r, sig_r, c, ref_c)
+                    sq_results_list.append((q_s, S, sigS, c, t))
+                except Exception as exc:
+                    print(f'  [WARN] S(q) failed for TC {c:g} mg/mL {t}: {exc}')
+
+            if sq_results_list:
+                sq_dir     = ensure(folder / 'sq_results')
+                sq_dat_dir = ensure(sq_dir / 'dat')
+                sq_bt_dir  = ensure(sq_dir / 'by_temperature')
+                sq_bc_dir  = ensure(sq_dir / 'by_concentration')
+                print(f'  S(q): reference TC {ref_c:g} mg/mL, '
+                      f'{len(sq_results_list)} curves → {sq_dir}')
+                plot_sq_by_temperature(sq_results_list, sq_bt_dir, datdir=sq_dat_dir)
+                plot_sq_by_concentration(sq_results_list, sq_bc_dir)
+
     print(f'  Done.')
 
 
@@ -996,6 +1267,9 @@ def main():
     ap.add_argument('--blank', default=None, metavar='DIR',
                     help='Name of folder (inside --base-dir) to use as blank '
                          'instead of in-folder MQ water; implies --blank_sub')
+    ap.add_argument('--ff-conc', type=float, default=None, metavar='MG_ML',
+                    help='TC concentration [mg/mL] to use as form-factor reference '
+                         'for S(q) (default: lowest TC concentration found)')
     args = ap.parse_args()
 
     global _PLOT_SNR
@@ -1004,14 +1278,20 @@ def main():
     base       = Path(args.base_dir)
     folders    = [f.strip() for f in args.data.split(',')]
     blank_dir  = base / args.blank if args.blank else None
-    do_blank   = args.blank_sub or (blank_dir is not None)
+    blank_type = None
+    if blank_dir is not None and not blank_dir.exists():
+        blank_type = args.blank
+        blank_dir  = None
+    do_blank   = args.blank_sub or (blank_dir is not None) or (blank_type is not None)
 
     for name in folders:
         process_folder(base / name,
                        qcut_manual=args.qcut,
                        normalize_exposure=args.normalize_exposure,
                        blank_sub=do_blank,
-                       blank_dir=blank_dir)
+                       blank_dir=blank_dir,
+                       blank_type=blank_type,
+                       ff_conc=args.ff_conc)
 
 
 if __name__ == '__main__':

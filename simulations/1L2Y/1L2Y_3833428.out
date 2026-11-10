@@ -1,0 +1,190 @@
+#!/bin/bash
+
+# Project information
+
+#SBATCH -A lu2026-2-71
+
+# Walltime HH:MM:SS
+#SBATCH -t 149:59:59
+
+# Job name and output files
+
+#SBATCH -J 1L2Y
+#SBATCH -o %x_%j.out
+#SBATCH -e %x_%j.err
+
+# print the sbatch submission file
+
+cat $0
+
+# Resources request
+
+#SBATCH -N 1
+#SBATCH --ntasks-per-node=1
+
+# NVIDIA A100 GPUs with AMD (Uncomment if GPU is needed)
+##SBATCH -p gpua100
+
+# Job notification (Uncomment if needed)
+##SBATCH --mail-user=sebastian.pineda_pineda@chem.lu.se
+##SBATCH --mail-type=END # other optional types: BEGIN,END,FAIL,REQUEUE,ALL
+
+#######################################
+# Log job resources and configuration
+#######################################
+
+echo "========================================"
+echo "SLURM Job Information"
+echo "========================================"
+echo "Job ID: $SLURM_JOB_ID"
+echo "Job Name: $SLURM_JOB_NAME"
+echo "Job Submit Time: $(date)"
+echo "User: $USER"
+echo "Working Directory: $(pwd)"
+echo ""
+echo "========================================"
+echo "CPU Configuration"
+echo "========================================"
+echo "Number of Nodes: $SLURM_NNODES"
+echo "Tasks per Node: $SLURM_NTASKS_PER_NODE"
+echo "Total Tasks: $SLURM_NTASKS"
+echo "CPUs per Task: $SLURM_CPUS_PER_TASK"
+echo "Walltime Limit: $SLURM_TIMELIMIT"
+echo ""
+echo "========================================"
+echo "Node Information"
+echo "========================================"
+echo "Allocated Nodes: $SLURM_NODELIST"
+echo ""
+echo "========================================"
+echo "Memory Configuration"
+echo "========================================"
+echo "Memory per Node: $SLURM_MEM_PER_NODE MB"
+echo ""
+echo "========================================"
+echo "System Hardware Info"
+echo "========================================"
+lscpu | head -20
+echo ""
+
+module purge
+module add GCCcore/12.3.0
+module add Python/3.11.3
+
+time "$SLURM_SUBMIT_DIR/analysis_faunus.sh" "$@"
+
+#######################################
+# Log final job statistics
+#######################################
+
+echo ""
+echo "========================================"
+echo "Job Completion Information"
+echo "========================================"
+echo "Job End Time: $(date)"
+echo "Exit Status: $?"
+echo ""
+echo "Note: To get detailed CPU time and efficiency statistics after job completion,"
+echo "run the following command with your job ID:"
+echo "  seff $SLURM_JOB_ID"
+echo ""
+echo "This will show:"
+echo "  - CPU Efficiency"
+echo "  - Memory Usage"
+echo "  - Allocated Resources"
+echo "  - Actual Usage"
+echo "========================================"
+
+OUTDIR=$(echo "$@" | grep -oP '(?<=--outdir )\S+')
+[[ -n "$OUTDIR" && -d "$OUTDIR" ]] && mv *.err *.out "$OUTDIR/"
+========================================
+SLURM Job Information
+========================================
+Job ID: 3833428
+Job Name: 1L2Y
+Job Submit Time: Fri Oct  9 06:24:35 PM CEST 2026
+User: pinedaps
+Working Directory: /home/pinedaps/ppis/faunus_simulations
+
+========================================
+CPU Configuration
+========================================
+Number of Nodes: 1
+Tasks per Node: 
+Total Tasks: 
+CPUs per Task: 1
+Walltime Limit: 
+
+========================================
+Node Information
+========================================
+Allocated Nodes: cn063
+
+========================================
+Memory Configuration
+========================================
+Memory per Node:  MB
+
+========================================
+System Hardware Info
+========================================
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           48 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  48
+On-line CPU(s) list:                     0-47
+Vendor ID:                               AuthenticAMD
+Model name:                              AMD EPYC 7413 24-Core Processor
+CPU family:                              25
+Model:                                   1
+Thread(s) per core:                      1
+Core(s) per socket:                      24
+Socket(s):                               2
+Stepping:                                1
+Frequency boost:                         enabled
+CPU(s) scaling MHz:                      94%
+CPU max MHz:                             3632.1799
+CPU min MHz:                             1500.0000
+BogoMIPS:                                5289.96
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 hw_pstate ssbd mba ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 invpcid cqm rdt_a rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local user_shstk clzero irperf xsaveerptr rdpru wbnoinvd amd_ppin brs arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold v_vmsave_vmload vgif v_spec_ctrl umip pku ospke vaes vpclmulqdq rdpid overflow_recov succor smca debug_swap
+
+Script started at: Fri Oct  9 06:24:36 PM CEST 2026
+Output directory: /home/pinedaps/ppis/faunus_simulations/1L2Y
+pdb: 1L2Y_capped   pH: 4.1   [Salt]: 0.00007
+Sweep (1 points): eps0.8368
+
+Waiting for 1 parallel simulations to finish...
+  [eps0.8368] Generating equilibration topology (repeat=5000)
+  [eps0.8368] Generating production topology (repeat=50000)
+  [eps0.8368] Equilibration (5000 repeats)
+  [eps0.8368] Production (50000 repeats)
+Generating plots...
+Contact peak:  1.312154  at r:  18.75
+First minimum:  0.948519  at r:  28.75
+Faunus simulations complete.
+
+========================================
+Execution Time Summary
+========================================
+Script started:  Fri Oct  9 06:24:36 PM CEST 2026
+Script ended:    Fri Oct  9 09:58:32 PM CEST 2026
+Total elapsed time: 3h 33m 56s (12836 seconds)
+=======================================
+
+========================================
+Job Completion Information
+========================================
+Job End Time: Fri Oct  9 09:58:32 PM CEST 2026
+Exit Status: 0
+
+Note: To get detailed CPU time and efficiency statistics after job completion,
+run the following command with your job ID:
+  seff 3833428
+
+This will show:
+  - CPU Efficiency
+  - Memory Usage
+  - Allocated Resources
+  - Actual Usage
+========================================

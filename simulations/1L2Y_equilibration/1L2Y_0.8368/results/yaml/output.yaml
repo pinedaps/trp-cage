@@ -1,0 +1,151 @@
+version:
+  faunus: 3.0.0-beta.3
+  git_revision: v3.0.0-beta.3-1-gb30ff93
+medium:
+  permittivity: Water
+  salt:
+  - NaCl
+  - 0.00007
+  temperature: 298.15
+blocks:
+- molecule: MOL1
+  N: 150
+  active: null
+  insert: !GridCOM
+    rotate: true
+cell: !Cuboid
+- 334.0209
+- 334.0209
+- 334.0209
+energy_change:
+  drift: 6.927791673660977e-13
+  final: -25.907728306689755
+  initial: 0.001031844576898595
+energy_timers:
+- nonbonded:
+    total: 99.99
+    energy: 36.18
+    update: 63.81
+propagate:
+  steps: 5000
+  seed: Hardware
+  collections:
+  - !Stochastic
+    cycles: 1
+    elapsed_seconds: 746.524349976
+    moves:
+    - !RotateMolecule
+      molecule: MOL1
+      max_angle: 1.0
+      weight: 1.0
+      repeat: 150
+      statistics:
+        num_trials: 258300
+        num_accepted: 247815
+        mean_square_displacement:
+          mean: 0.3148287495755032
+          samples: 258300
+        elapsed_seconds: 0.0
+        info: {}
+        energy_change_sum: -29.44199432692599
+        acceptance_ratio: 0.9594076655052265
+    - !TranslateMolecule
+      molecule: MOL1
+      max_displacement: 10.0
+      directions: xyz
+      weight: 1.0
+      repeat: 150
+      statistics:
+        num_trials: 245850
+        num_accepted: 228646
+        mean_square_displacement:
+          mean: 30.334674383702563
+          samples: 245850
+        elapsed_seconds: 0.0
+        info: {}
+        energy_change_sum: 3.659873310811811
+        acceptance_ratio: 0.9300223713646533
+    - !ClusterMove
+      molecule: MOL1
+      max_displacement: 10.0
+      max_angle: 1.0
+      threshold: 46.25
+      use_com: true
+      cluster_size:
+        mean: 6.5865771812080505
+        error: 0.19835774526956593
+      bias_rejection_rate: 0.5142769981696156
+      rmsd_translation: 3.8726980864211487
+      rmsd_rotation: 0.37188366616139895
+      weight: 1.0
+      repeat: 10
+      statistics:
+        num_trials: 16390
+        num_accepted: 7961
+        mean_square_displacement:
+          mean: 0.0
+          samples: 8429
+        elapsed_seconds: 0.0
+        info: {}
+        energy_change_sum: -0.12663913515178285
+        acceptance_ratio: 0.48572300183038436
+  criterion: MetropolisHastings
+analysis:
+- energy:
+    num_samples: 500
+    mean: -18.947202291551317
+- energy:
+    num_samples: 500
+    mean: -8.09656892851122
+    selections:
+    - hydrophobic and molecule MOL1
+    - hydrophobic and molecule MOL1
+- rdf:
+    num_samples: 500
+    num_bins: 334
+- structure_writer:
+    file: traj.xtc
+    num_samples: 1000
+- structure_writer:
+    file: traj_final.xyz
+    num_samples: 1
+- multipole:
+    selection: molecule MOL1
+    num_samples: 500
+    charge:
+      mean: 1.1800000000000002
+      error: 0.0
+    capacitance: 0.0
+    dipole_moment:
+      mean: 4.096332337189048
+      error: 0.0
+    quadrupole_moment:
+      mean: 55.505330069310176
+      error: 9.5367431640625e-7
+    quadrupole_tensor:
+      order:
+      - xx
+      - xy
+      - xz
+      - yy
+      - yz
+      - zz
+      values:
+      - 0.0004643569657377418
+      - -0.05721596441967603
+      - -0.08340372233139969
+      - -0.19989565097491976
+      - -0.03365674048971242
+      - 0.19943129400918
+      errors:
+      - 20.180649305196177
+      - 17.53824399998869
+      - 17.610336516114376
+      - 20.220937494988423
+      - 17.53854686715715
+      - 20.346132996749912
+- multipole_distribution:
+    num_samples: 500
+    num_bins: 313
+    bjerrum_length/Å: 7.152761924404171
+    kirkwood_factor: 0.9748791183092023

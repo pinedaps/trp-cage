@@ -1,0 +1,1 @@
+./launch_analysis.sh --pdb ../pdbs/1L2Y_capped.pdb --epsilons 0.8368 --T 298.15 --pH 4.1 --saltcon 0.00007 --N 150 --concentration 14.5 --repeat 50000 --outdir 1L2Y

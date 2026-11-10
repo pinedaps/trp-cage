@@ -1,0 +1,59 @@
+SAXS Machine Calibration — Trp-cage (1L2Y)
+==========================================
+
+Goal: find the scale factor to overlay Faunus simulation I(q) with experimental SAXS.
+
+--- P(q) fit route (pripps) ---
+
+Command:
+  tail -n +2 <dat_file_5.2_mg_mL_25C> > /tmp/exp_52_noheader.dat
+
+  /home/sebastian/projects/pripps/target/release/pripps \
+    -a /home/sebastian/projects/pripps/assets/poly_amino_acid_combined.yaml \
+    -i /home/sebastian/projects/trp-cage/form_factor_pdb/1L2Y_capped.xyz \
+    -o /tmp/fit_52.csv \
+    --fit /tmp/exp_52_noheader.dat \
+    debye --qmin 0.06 --qmax 0.35 --nq 300
+
+  The atomfile (poly_amino_acid_combined.yaml) uses residue-level contrast form
+  factors (in-vacuo electrons minus displaced bulk water, baked in). Output is
+  P(q) in e²_eff. --nq sets the resolution of the computed curve, not fit quality.
+
+Result:
+  scale s = 3.47e-8  a.u./e²_eff      (χ²/N = 30.9)
+  Concentration used: 5.1 mg/mL actual (label says 5.2), 25 °C
+  MW = 2169.42 g/mol
+
+Machine calibration:
+  n   = (5.1/2169.42) × 1e-3 × Na = 1.416e18 cm⁻³
+  r_e = 2.818e-13 cm
+  machine_factor = s / (n × r_e²) = 0.309 a.u./cm⁻¹  →  1 a.u. ≈ 3.24 cm⁻¹
+
+Caveat: χ²/N = 30.9 is high and S(q) ≠ 1 even at 5.1 mg/mL (no added salt,
+~70 µM NaCl background → very long screening length). Scale s is biased.
+
+--- Empirical I(q) overlap route (more reliable here) ---
+
+Fit c_emp × I_sim to I_exp over q = 0.07–0.33 Å⁻¹ at 14.5 mg/mL, 25 °C.
+I_sim from simulations/intensity.csv (N=150, L=334.02 Å box).
+S(q) cancels between I_exp and I_sim → less biased.
+
+  c_emp = 4.85e-10  a.u./sim_unit   →   1 a.u. ≈ 4.39 cm⁻¹
+
+--- Summary ---
+
+  P(q) fit route  : c = 6.57e-10  (1 a.u. ≈ 3.24 cm⁻¹)
+  Empirical route : c = 4.85e-10  (1 a.u. ≈ 4.39 cm⁻¹)
+  Difference: ~35% — attributed to S(q) ≠ 1 at lowest concentration.
+
+  Preferred scaling for sim vs exp plots: c_emp = 4.85e-10
+  Machine factor best estimate: ~3–5 cm⁻¹/a.u.
+
+  For a cleaner machine calibration: repeat P(q) measurement in high salt
+  (S(q) → 1) or use a BSA/water absolute standard.
+
+--- Plot script ---
+  /home/sebastian/projects/trp-cage/simulations/plot_sim_vs_exp.py
+  Run: python3 plot_sim_vs_exp.py --qmin 0.07
+  --qmin sets the lower q bound for the scale factor fit only;
+  experimental data is shown from its natural starting q.

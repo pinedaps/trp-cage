@@ -1,0 +1,1 @@
+python3 ../../ppis/faunus_simulations/plot_scripts/plot_saxs_Ic.py fit_result_comb_25_new.csv -o new --loglog

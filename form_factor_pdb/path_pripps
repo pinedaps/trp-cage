@@ -1,0 +1,1 @@
+../../pripps/target/release/pripps -a ../../pripps/assets/poly_amino_acid_combined.yaml -i 1L2Y_capped.xyz -o fit_result_comb_25_new.csv --fit ../saxs/260820/processed_saxs_nb_20261021/stitched/overlay_zoom/TC_5.2_mg_mL__2352_µM___25_C.dat debye --nq 300 --excluded disabled

@@ -1,0 +1,45 @@
+The following modules were not unloaded:
+  (Use "module --force purge" to unload all):
+
+  1) SoftwareTree/Milan
+/home/pinedaps/.local/lib/python3.11/site-packages/mdtraj/formats/pdb/pdbfile.py:208: UserWarning: Unlikely unit cell vectors detected in PDB file likely resulting from a dummy CRYST1 record. Discarding unit cell vectors.
+  warnings.warn(
+INFO:root:Converted /home/pinedaps/ppis/pdbs/1L2Y_capped.pdb -> 1L2Y_capped.xyz with 20 residues.
+INFO:root:Protein MW: 2169.4 Da (20 residues)
+INFO:root:Box length: 334.02 Å  (N=150, c=14.5 mg/mL, MW=2169.4 Da)
+INFO:root:Topology written to topology_1L2Y_capped_eps0.8368_equil.yaml
+/home/pinedaps/.local/lib/python3.11/site-packages/mdtraj/formats/pdb/pdbfile.py:208: UserWarning: Unlikely unit cell vectors detected in PDB file likely resulting from a dummy CRYST1 record. Discarding unit cell vectors.
+  warnings.warn(
+INFO:root:Converted /home/pinedaps/ppis/pdbs/1L2Y_capped.pdb -> 1L2Y_capped.xyz with 20 residues.
+INFO:root:Protein MW: 2169.4 Da (20 residues)
+INFO:root:Box length: 334.02 Å  (N=150, c=14.5 mg/mL, MW=2169.4 Da)
+INFO:root:Topology written to topology_1L2Y_capped_eps0.8368.yaml
+ INFO  faunus::cli > faunus 3.0.0-beta.3 (git v3.0.0-beta.3-1-gb30ff93)
+ INFO  faunus::analysis::multipole > Multipole: selection 'molecule MOL1' matched 150 groups
+ INFO  faunus::simulation          > Medium: 𝑇 = 298.15 K, εᵣ = 78.36, λᴮ = 7.15 Å, 𝐼 = 0.07 mM, λᴰ = 363.26 Å, 0.00 M 🧂Salt = NaCl
+ INFO  faunus::simulation          > Thermal energy: 2.48 kJ/mol
+ INFO  faunus::simulation          > Initial energy = 0.00 kJ/mol
+ INFO  faunus::simulation          > Net charge = 1.7700e2 e
+ INFO  faunus::analysis::structure_writer > VMD visualization: vmd -e traj.tcl
+ INFO  faunus::analysis::structure_writer > VMD visualization: vmd -e traj_final.tcl
+ INFO  faunus::simulation                 > Final energy = -25.91 kJ/mol
+ INFO  faunus::simulation                 > Net charge = 1.7700e2 e
+ INFO  faunus::simulation                 > Energy drift: 6.93e-13 kJ/mol (relative: 2.67e-14) ✅
+ INFO  faunus::simulation                 > Saved simulation state to state.yaml
+ INFO  faunus::cli > faunus 3.0.0-beta.3 (git v3.0.0-beta.3-1-gb30ff93)
+ INFO  faunus::analysis::multipole > Multipole: selection 'molecule MOL1' matched 150 groups
+ INFO  faunus::state               > Restored simulation state
+ INFO  faunus::simulation          > Medium: 𝑇 = 298.15 K, εᵣ = 78.36, λᴮ = 7.15 Å, 𝐼 = 0.07 mM, λᴰ = 363.26 Å, 0.00 M 🧂Salt = NaCl
+ INFO  faunus::simulation          > Thermal energy: 2.48 kJ/mol
+ INFO  faunus::simulation          > Initial energy = -25.91 kJ/mol
+ INFO  faunus::simulation          > Net charge = 1.7700e2 e
+ INFO  faunus::analysis::structure_writer > VMD visualization: vmd -e traj.tcl
+ INFO  faunus::analysis::structure_writer > VMD visualization: vmd -e traj_final.tcl
+ INFO  faunus::simulation                 > Final energy = -11.71 kJ/mol
+ INFO  faunus::simulation                 > Net charge = 1.7700e2 e
+ INFO  faunus::simulation                 > Energy drift: 3.94e-12 kJ/mol (relative: 3.36e-13) ✅
+ INFO  faunus::simulation                 > Saved simulation state to state.yaml
+
+real	213m56.059s
+user	212m10.514s
+sys	0m2.809s
