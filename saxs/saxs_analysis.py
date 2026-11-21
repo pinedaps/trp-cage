@@ -38,6 +38,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from scipy.interpolate import interp1d
+from scipy.optimize import curve_fit
 from scipy.signal import savgol_filter
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -936,7 +937,7 @@ def _save_grouped_overlay(relabelled: list, title: str, stem: str, outdir: Path,
             save_dat(datdir / f'{_safe(lbl)}.dat', q[m], I[m], sig[m], lbl)
 
 
-_GRP_XLIM = (6e-2, 7e-1)
+_GRP_XLIM = (8e-2, 7e-1)
 _GRP_YLIM = (1e-5, 1e-2)
 
 
@@ -1152,6 +1153,224 @@ def plot_sq_by_concentration(sq_results: list, outdir: Path):
         print(f'    {out.name}')
 
 
+# ── Guinier analysis and B2 from I(q) ────────────────────────────────────────
+
+def _guinier_fail(n: int = 0) -> dict:
+    return dict(I0=np.nan, I0_err=np.nan, Rg=np.nan, Rg_err=np.nan,
+                qRg_max=np.nan, q_lo=np.nan, q_hi=np.nan, n_pts=n, valid=False)
+
+
+def guinier_fit(q: np.ndarray, I: np.ndarray, sigI: np.ndarray,
+                q_max: float = 0.25,
+                snr_min: float = 2.0) -> dict:
+    """
+    Weighted Guinier fit: ln I(q) = ln I(0) − Rg²q²/3.
+
+    SNR cut (I/σ ≥ snr_min) and 3-MAD sigma-clip on ln I remove noisy/artefact
+    points.  After an initial fit the range is trimmed to q·Rg < 1.3 and the
+    fit is repeated if needed.
+
+    Returns dict: I0, I0_err, Rg [Å], Rg_err, qRg_max, q_lo, q_hi, n_pts, valid.
+    """
+    def _do_fit(q_w, I_w, sig_w):
+        lnI = np.log(I_w)
+        med = np.median(lnI)
+        mad = np.median(np.abs(lnI - med)) * 1.4826
+        if mad > 0:
+            ok = np.abs(lnI - med) <= 3.0 * mad
+            if ok.sum() >= 3:
+                q_w, I_w, sig_w, lnI = q_w[ok], I_w[ok], sig_w[ok], lnI[ok]
+        if len(q_w) < 3:
+            return None
+        # weights ∝ 1/σ(ln I) = I/σI  (np.polyfit squares them internally)
+        w = I_w / sig_w
+        try:
+            cf, cov = np.polyfit(q_w ** 2, lnI, 1, w=w, cov=True)
+        except (np.linalg.LinAlgError, ValueError):
+            return None
+        slope, intercept = float(cf[0]), float(cf[1])
+        if slope >= 0:
+            return None
+        Rg     = float(np.sqrt(-3.0 * slope))
+        Rg_err = float(1.5 * float(np.sqrt(cov[0, 0])) / Rg)
+        I0     = float(np.exp(intercept))
+        I0_err = float(I0 * float(np.sqrt(cov[1, 1])))
+        return dict(I0=I0, I0_err=I0_err, Rg=Rg, Rg_err=Rg_err,
+                    qRg_max=float(q_w.max() * Rg),
+                    q_lo=float(q_w.min()), q_hi=float(q_w.max()),
+                    n_pts=len(q_w), valid=True)
+
+    mask = ((q <= q_max) & (I > 0) &
+            np.isfinite(I) & np.isfinite(sigI) & (sigI > 0))
+    if snr_min > 0:
+        mask &= (I / sigI) >= snr_min
+
+    q_w, I_w, sig_w = q[mask], I[mask], sigI[mask]
+    if len(q_w) < 3:
+        return _guinier_fail(int(mask.sum()))
+
+    r = _do_fit(q_w, I_w, sig_w)
+    if r is None:
+        return _guinier_fail(int(mask.sum()))
+
+    # Trim to q·Rg < 1.3 and refit if range was too generous
+    q_valid = 1.3 / r['Rg']
+    if r['q_hi'] > q_valid:
+        mask2 = mask & (q <= q_valid)
+        q_w2, I_w2, sig_w2 = q[mask2], I[mask2], sigI[mask2]
+        if len(q_w2) >= 3:
+            r2 = _do_fit(q_w2, I_w2, sig_w2)
+            if r2 is not None:
+                return r2
+    return r
+
+
+def _plot_guinier(tc_zoom: list, rows: list, outdir: Path) -> None:
+    valid = [(tc_zoom[i], rows[i]) for i in range(len(rows)) if rows[i]['valid']]
+    if not valid:
+        return
+    colors = _colors(len(valid))
+    fig, ax = plt.subplots(figsize=(7, 5), dpi=DPI)
+    for (q, I, sig, conc_mg, temp), r, c in zip(
+            [s for s, _ in valid], [f for _, f in valid], colors):
+        v = (I > 0) & np.isfinite(I) & np.isfinite(sig) & (q <= r['q_hi'] * 1.5)
+        ax.errorbar(q[v] ** 2, np.log(I[v]), yerr=sig[v] / I[v],
+                    fmt='.', color=c, ms=3, lw=0.5, alpha=0.5,
+                    label=f'TC {conc_mg:g} mg/mL, {temp}')
+        q_line = np.linspace(0, r['q_hi'] ** 2 * 1.1, 100)
+        ax.plot(q_line, np.log(r['I0']) - r['Rg'] ** 2 / 3.0 * q_line,
+                color=c, lw=1.2, ls='--')
+        ax.axvline((1.3 / r['Rg']) ** 2, color=c, lw=0.6, ls=':', alpha=0.4)
+    ax.set_xlabel(r'$q^2$ [$\mathrm{\AA}^{-2}$]', fontsize=FS_LBL)
+    ax.set_ylabel(r'$\ln\,I(q)$', fontsize=FS_LBL)
+    ax.set_title('Guinier plot', fontsize=FS_TTL)
+    ax.grid(True, alpha=A_GRID)
+    ax.tick_params(labelsize=FS_TK)
+    ax.legend(fontsize=FS_LEG, frameon=True, loc='upper right')
+    fig.tight_layout(pad=0.2)
+    out = outdir / 'guinier_plot.png'
+    fig.savefig(out, dpi=DPI, bbox_inches='tight')
+    plt.close(fig)
+    print(f'    {out.name}')
+
+
+def _plot_zimm_iq(rows: list, outdir: Path) -> None:
+    by_temp: dict[str, list] = {}
+    for r in rows:
+        if r['valid']:
+            by_temp.setdefault(r['temp'], []).append(r)
+    if not by_temp:
+        return
+    colors = _colors(len(by_temp))
+    fig, ax = plt.subplots(figsize=(6, 5), dpi=DPI)
+    for (t, pts), col in zip(sorted(by_temp.items()), colors):
+        pts_s  = sorted(pts, key=lambda x: x['conc_mg'])
+        c_g    = np.array([p['conc_mg'] / 1000.0 for p in pts_s])
+        I0_arr = np.array([p['I0'] for p in pts_s])
+        I0_err = np.array([p['I0_err'] for p in pts_s])
+        y      = c_g / I0_arr
+        y_err  = np.maximum(c_g * I0_err / I0_arr ** 2, 1e-30)
+        ax.errorbar(c_g * 1000, y, yerr=y_err, fmt='o', color=col,
+                    ms=5, lw=LW, label=t)
+        if len(pts_s) >= 2:
+            cf     = np.polyfit(c_g, y, 1, w=1.0 / y_err)
+            c_line = np.linspace(0, c_g.max() * 1.15, 80)
+            ax.plot(c_line * 1000, np.polyval(cf, c_line),
+                    color=col, lw=0.8, ls='--', alpha=0.7)
+    ax.set_xlabel(r'$c$ [mg/mL]', fontsize=FS_LBL)
+    ax.set_ylabel(r'$c\,/\,I(0)$ [a.u.]', fontsize=FS_LBL)
+    ax.set_title('Zimm plot', fontsize=FS_TTL)
+    ax.grid(True, alpha=A_GRID)
+    ax.tick_params(labelsize=FS_TK)
+    ax.legend(fontsize=FS_LEG, frameon=True)
+    fig.tight_layout(pad=0.2)
+    out = outdir / 'zimm_plot.png'
+    fig.savefig(out, dpi=DPI, bbox_inches='tight')
+    plt.close(fig)
+    print(f'    {out.name}')
+
+
+def analyse_guinier_b2(tc_zoom: list,
+                       outdir: Path,
+                       q_max: float = 0.25,
+                       snr_min: float = 2.0) -> None:
+    """
+    Guinier analysis on each stitched I(q) curve in tc_zoom → Rg, I(0), B2.
+
+    tc_zoom entries: (q, I, sig, conc_mg, temp).
+
+    Per sample: fit ln I = ln I(0) − Rg²q²/3, auto-trimmed to q·Rg < 1.3.
+    Zimm plot (c/I(0) vs c) per temperature gives B2 without absolute calibration:
+        slope/intercept = 2·B2·M  →  B2 = slope / (2·M · intercept)   [mol·mL/g²]
+
+    Saves guinier_b2.csv, Guinier plot, and Zimm plot in outdir.
+    """
+    if not tc_zoom:
+        return
+
+    rows: list[dict] = []
+    for q, I, sig, conc_mg, temp in tc_zoom:
+        r = guinier_fit(q, I, sig, q_max=q_max, snr_min=snr_min)
+        rows.append(dict(temp=temp, conc_mg=conc_mg, **r))
+
+    print(f'\n  Guinier analysis  (initial q_max = {q_max} Å⁻¹, SNR ≥ {snr_min}):')
+    hdr = (f'  {"c [mg/mL]":<12} {"Temp":<8} {"Rg [Å]":<10} {"±":<7} '
+           f'{"I(0)":<12} {"q·Rg_max":<10} n')
+    print(hdr)
+    print('  ' + '-' * (len(hdr) - 2))
+    for r in rows:
+        rg_s = f'{r["Rg"]:.2f}'      if r['valid'] else '—'
+        re_s = f'{r["Rg_err"]:.2f}'  if r['valid'] else ''
+        i0_s = f'{r["I0"]:.4e}'      if r['valid'] else '—'
+        qr_s = f'{r["qRg_max"]:.2f}' if r['valid'] else '—'
+        print(f'  {r["conc_mg"]:<12.2f} {r["temp"]:<8} '
+              f'{rg_s:<10} {re_s:<7} {i0_s:<12} {qr_s:<10} {r["n_pts"]}')
+
+    # Per-temperature Zimm → B2
+    print()
+    by_temp: dict[str, list] = {}
+    for r in rows:
+        if r['valid']:
+            by_temp.setdefault(r['temp'], []).append(r)
+
+    for t in sorted(by_temp):
+        pts   = sorted(by_temp[t], key=lambda x: x['conc_mg'])
+        c_g   = np.array([p['conc_mg'] / 1000.0 for p in pts])
+        I0_v  = np.array([p['I0'] for p in pts])
+        I0_e  = np.array([p['I0_err'] for p in pts])
+        y     = c_g / I0_v
+        y_err = np.maximum(c_g * I0_e / I0_v ** 2, 1e-30)
+        if len(pts) >= 2:
+            cf        = np.polyfit(c_g, y, 1, w=1.0 / y_err)
+            slope, ic = float(cf[0]), float(cf[1])
+            if ic > 0:
+                B2 = slope / (2.0 * MW_DA * ic)
+                print(f'  Zimm B2 ({t}):  2·B2·M = {slope/ic:.4g} mL/g  '
+                      f'B2 = {B2:.3e} mol·mL/g²')
+            else:
+                print(f'  Zimm B2 ({t}):  intercept ≤ 0 — fit unreliable')
+        else:
+            print(f'  ({t}) only one concentration — Zimm B2 not available')
+
+    # Save CSV
+    def _f(v):
+        return f'{float(v):.6g}' if np.isfinite(float(v)) else 'nan'
+
+    csv_path = outdir / 'guinier_b2.csv'
+    with open(csv_path, 'w') as fh:
+        fh.write('temp,conc_mg_mL,Rg_A,Rg_err_A,I0,I0_err,'
+                 'qRg_max,q_lo_A,q_hi_A,n_pts,valid\n')
+        for r in rows:
+            fh.write(f'{r["temp"]},{r["conc_mg"]:.4f},'
+                     f'{_f(r["Rg"])},{_f(r["Rg_err"])},{_f(r["I0"])},{_f(r["I0_err"])},'
+                     f'{_f(r["qRg_max"])},{_f(r["q_lo"])},{_f(r["q_hi"])},'
+                     f'{r["n_pts"]},{r["valid"]}\n')
+    print(f'  → {csv_path}')
+
+    _plot_guinier(tc_zoom, rows, outdir)
+    _plot_zimm_iq(rows, outdir)
+
+
 # ── Main per-folder pipeline ───────────────────────────────────────────────────
 
 def _temp_key(s: dict) -> str:
@@ -1167,7 +1386,8 @@ def process_folder(folder: Path,
                    ff_conc: float | None = None,
                    pq_dir: Path | None = None,
                    pq_comb: bool = False,
-                   pq_norm_q: tuple[float, float] = (0.25, 0.40)):
+                   pq_norm_q: tuple[float, float] = (0.25, 0.40),
+                   q_guinier_max: float = 0.25):
     if not folder.exists():
         print(f'[WARN] Folder not found: {folder}', file=sys.stderr)
         return
@@ -1394,6 +1614,10 @@ def process_folder(folder: Path,
             tc_zoom.append((q[m], I[m], sig[m], conc_mg, t))
 
     if tc_zoom:
+        gb_dir = ensure(folder / 'guinier_b2')
+        analyse_guinier_b2(tc_zoom, gb_dir, q_max=q_guinier_max)
+
+    if tc_zoom:
         avail_concs = sorted({item[3] for item in tc_zoom})
         ref_c = ff_conc if ff_conc is not None else avail_concs[0]
 
@@ -1503,10 +1727,24 @@ def main():
                     metavar=('Q_LO', 'Q_HI'),
                     help='q window [Å⁻¹] where S(q)→1 for Seff normalisation '
                          '(default: 0.25 0.40)')
+    ap.add_argument('--q-guinier-max', type=float, default=0.25, metavar='A_INV',
+                    help='Upper q limit [Å⁻¹] for Guinier fit / B2 extraction '
+                         '(auto-trimmed to q·Rg < 1.3; default: 0.25)')
+    ap.add_argument('--zoom-q', nargs=2, type=float, default=None,
+                    metavar=('Q_LO', 'Q_HI'),
+                    help='q window [Å⁻¹] for zoom/S(q)/Guinier data selection '
+                         '(default: 0.08 0.7)')
+    ap.add_argument('--zoom-i', nargs=2, type=float, default=None,
+                    metavar=('I_LO', 'I_HI'),
+                    help='I(q) window for zoom data selection (default: 1e-5 1e-2)')
     args = ap.parse_args()
 
-    global _PLOT_SNR
+    global _PLOT_SNR, _GRP_XLIM, _GRP_YLIM
     _PLOT_SNR = args.snr
+    if args.zoom_q is not None:
+        _GRP_XLIM = tuple(args.zoom_q)
+    if args.zoom_i is not None:
+        _GRP_YLIM = tuple(args.zoom_i)
 
     base       = Path(args.base_dir)
     folders    = [f.strip() for f in args.data.split(',')]
@@ -1529,7 +1767,8 @@ def main():
                        ff_conc=args.ff_conc,
                        pq_dir=pq_dir,
                        pq_comb=args.pq_fit_comb,
-                       pq_norm_q=tuple(args.pq_norm_q))
+                       pq_norm_q=tuple(args.pq_norm_q),
+                       q_guinier_max=args.q_guinier_max)
 
 
 if __name__ == '__main__':
